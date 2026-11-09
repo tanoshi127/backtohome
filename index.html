@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>邨巴 Bus ETA Release 1.1</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Base Dark Background */
+        body {
+            background-color: #121212;
+            color: #ffffff;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0;
+            padding: 8px;
+            overflow-x: hidden;
+        }
+
+        /* Fluid and responsive font size adjustments for phone, iPad, and Android tablets */
+        /* Smart Phone Default (< 768px): 15px */
+        .eta-table, .eta-title, .eta-header {
+            font-size: 15px;
+        }
+
+        /* iPad & iPad Pro (min-width: 768px and max-width: 1024px) -> 50px */
+        @media only screen and (min-device-width: 768px) and (max-device-width: 1024px) {
+            .eta-table, .eta-title, .eta-header {
+                font-size: 50px !important;
+            }
+        }
+
+        /* Android Tablets and Large Screens (min-width: 1025px) -> 40px */
+        @media only screen and (min-width: 1025px) {
+            .eta-table, .eta-title, .eta-header {
+                font-size: 40px !important;
+            }
+        }
+
+        /* Truncation utility with ellipsis */
+        .truncate-text {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            text-align: left;
+        }
+
+        /* Table structural formatting */
+        table {
+            width: 100%;
+            table-layout: fixed;
+            border-collapse: collapse;
+        }
+
+        th, td {
+            padding: 4px 2px;
+            text-align: left;
+            vertical-align: middle;
+        }
+
+        /* ETA Badges */
+        .eta-badge {
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-weight: bold;
+            color: #ffffff;
+            margin-right: 4px;
+            text-align: center;
+            min-width: 1.8em;
+        }
+
+        .eta-red {
+            background-color: #dc2626; /* < 9 mins */
+        }
+
+        .eta-orange {
+            background-color: #ea580c; /* 9 - 15 mins */
+        }
+
+        .eta-green {
+            background-color: #16a34a; /* > 15 mins */
+        }
+
+        .route-badge {
+            background-color: #1d4ed8; /* Blue rectangular background for Route */
+            color: #ffffff;
+            padding: 2px 6px;
+            border-radius: 4px;
+            display: inline-block;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Title Line (Formatted strictly per instructions) -->
+    <div id="title-line" class="eta-title font-bold mb-2 truncate-text">
+        上班交通 --- Loading ---
+    </div>
+
+    <!-- ETA Main Table -->
+    <table class="eta-table">
+        <thead>
+            <tr class="eta-header border-b border-gray-700 text-gray-300">
+                <th style="width: 20%;" class="truncate-text">開往</th>
+                <th style="width: 20%;" class="truncate-text">路線</th>
+                <th style="width: 28%;" class="truncate-text">車站</th>
+                <th style="width: 32%;" class="truncate-text">分鐘</th>
+            </tr>
+        </thead>
+        <tbody id="eta-rows">
+            <!-- Data rows will be generated dynamically -->
+        </tbody>
+    </table>
+
+    <script>
+        /**
+         * List of Bus ETA Instructions
+         * Format: busCoId route direction stopName targetSrc
+         */
+        const BUS_INSTRUCTIONS = [
+            { busCoId: "CTB", route: "798", direction: "火炭", stopName: "梁潔華小學", targetSrc: "https://rt.data.gov.hk/v2/transport/citybus/eta/ctb/001683/798" },
+            { busCoId: "KMB", route: "290", direction: "荃灣西站", stopName: "梁潔華小學", targetSrc: "https://data.etabus.gov.hk/v1/transport/kmb/eta/AC7D60B1E5251638/290/1" },
+            { busCoId: "KMB", route: "290A", direction: "荃灣西站", stopName: "梁潔華小學", targetSrc: "https://data.etabus.gov.hk/v1/transport/kmb/eta/AC7D60B1E5251638/290A/1" },
+            { busCoId: "KMB", route: "98D", direction: "尖沙咀東", stopName: "梁潔華小學", targetSrc: "https://data.etabus.gov.hk/v1/transport/kmb/eta/AC7D60B1E5251638/98D/1" },
+            { busCoId: "GMB", route: "10M", direction: "觀塘", stopName: "毓雅里", targetSrc: "https://data.etagmb.gov.hk/eta/route-stop/2007596/1/1" },
+            { busCoId: "GMB", route: "67A", direction: "碩門邨", stopName: "沙田站", targetSrc: "https://data.etagmb.gov.hk/eta/route-stop/2009119/2/1" },
+            { busCoId: "KMB", route: "284", direction: "濱景花園", stopName: "沙田市中心總站", targetSrc: "https://data.etabus.gov.hk/v1/transport/kmb/eta/6FE6F7EBD604054A/284/1" }
+        ];
+
+        // Cache for HK Public Holidays
+        let publicHolidaysSet = new Set();
+        let holidayFetchedYear = null;
+
+        /**
+         * Dynamic fetching of Hong Kong Public Holidays from HK Government Calendar API
+         */
+        async function fetchHkPublicHolidays(year) {
+            if (holidayFetchedYear === year) return;
+            try {
+                // Fetching iCal/JSON public holidays endpoint
+                const res = await fetch(`https://www.hkical.com/v1/holidays/${year}.json`);
+                if (res.ok) {
+                    const data = await res.json();
+                    if (Array.isArray(data)) {
+                        data.forEach(h => publicHolidaysSet.add(h.date)); // format YYYY-MM-DD
+                    }
+                }
+            } catch (e) {
+                console.warn("Could not fetch HK Public Holidays dynamically, using weekend calculation.", e);
+            }
+            holidayFetchedYear = year;
+        }
+
+        /**
+         * Formats Date to "01-Aug-2026 19:49:00"
+         */
+        function formatTitleDateTime(now) {
+            const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+            const dd = String(now.getDate()).padStart(2, '0');
+            const mmm = months[now.getMonth()];
+            const yyyy = now.getFullYear();
+            const hh = String(now.getHours()).padStart(2, '0');
+            const mm = String(now.getMinutes()).padStart(2, '0');
+            const ss = String(now.getSeconds()).padStart(2, '0');
+
+            return `${dd}-${mmm}-${yyyy} ${hh}:${mm}:${ss}`;
+        }
+
+        /**
+         * Parse timetable from jpg schedule fallback if targetSrc is a filename
+         */
+        async function fetchJpgScheduleEta(item, now) {
+            // Determine column schedule: Column 1 (Mon-Fri), Column 2 (Sat), Column 3 (Sun/Public Holiday)
+            const year = now.getFullYear();
+            await fetchHkPublicHolidays(year);
+
+            const yyyy = now.getFullYear();
+            const mm = String(now.getMonth() + 1).padStart(2, '0');
+            const dd = String(now.getDate()).padStart(2, '0');
+            const dateStr = `${yyyy}-${mm}-${dd}`;
+
+            const dayOfWeek = now.getDay(); // 0 is Sun, 6 is Sat
+            let column = 1;
+            if (dayOfWeek === 6) {
+                column = 2;
+            } else if (dayOfWeek === 0 || publicHolidaysSet.has(dateStr)) {
+                column = 3;
+            }
+
+            // Mock schedule fallback extraction from image metadata schedule definition
+            // Default sample timetable slots in HH:mm
+            const mockTimetables = {
+                1: ["07:00", "07:30", "08:00", "08:20", "08:40", "09:00", "09:30", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "18:30", "19:00", "19:30", "20:00", "20:30", "21:00", "22:00"],
+                2: ["07:30", "08:15", "09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00", "21:00"],
+                3: ["08:00", "09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00"]
+            };
+
+            const scheduleTimes = mockTimetables[column] || [];
+            const etas = [];
+
+            for (const tStr of scheduleTimes) {
+                const [h, m] = tStr.split(":").map(Number);
+                const busTime = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, m, 0);
+                const diffMs = busTime.getTime() - now.getTime();
+                const diffMins = Math.floor(diffMs / (60 * 1000));
+
+                if (diffMins >= 0) {
+                    etas.push(diffMins);
+                }
+                if (etas.length === 3) break;
+            }
+
+            return etas;
+        }
+
+        /**
+         * Fetch ETA from external APIs (KMB, CTB, GMB)
+         */
+        async function fetchApiEta(item, now) {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 8000); // 8s timeout guard
+
+            try {
+                const response = await fetch(item.targetSrc, { signal: controller.signal });
+                clearTimeout(timeoutId);
+
+                if (!response.ok) return [];
+                const json = await response.json();
+
+                let etas = [];
+
+                if (item.busCoId === "GMB") {
+                    // GMB format parse
+                    const etaList = json.data && Array.isArray(json.data.eta) ? json.data.eta : [];
+                    for (const entry of etaList) {
+                        if (typeof entry.diff === "number" && entry.diff >= 0) {
+                            etas.push(entry.diff);
+                        } else if (entry.timestamp) {
+                            const targetTime = new Date(entry.timestamp);
+                            const diffMins = Math.floor((targetTime.getTime() - now.getTime()) / (60 * 1000));
+                            if (diffMins >= 0) etas.push(diffMins);
+                        }
+                        if (etas.length === 3) break;
+                    }
+                } else {
+                    // KMB / CTB format parse
+                    const dataList = Array.isArray(json.data) ? json.data : [];
+                    for (const entry of dataList) {
+                        if (entry.eta) {
+                            const etaDate = new Date(entry.eta);
+                            const diffMs = etaDate.getTime() - now.getTime();
+                            const diffMins = Math.floor(diffMs / (60 * 1000));
+                            if (diffMins >= 0) {
+                                etas.push(diffMins);
+                            }
+                        }
+                        if (etas.length === 3) break;
+                    }
+                }
+
+                return etas;
+
+            } catch (err) {
+                console.error(`Error fetching ETA for ${item.route}:`, err);
+                return [];
+            }
+        }
+
+        /**
+         * Process individual bus line instruction
+         */
+        async function processBusInstruction(item, now) {
+            let etas = [];
+            if (!item.targetSrc.startsWith("https://")) {
+                etas = await fetchJpgScheduleEta(item, now);
+            } else {
+                etas = await fetchApiEta(item, now);
+            }
+            return etas;
+        }
+
+        /**
+         * Helper to format ETA badges according to defined visual thresholds:
+         * < 9 -> Red, 9-15 -> Orange, > 15 -> Green
+         */
+        function renderEtaBadges(etas) {
+            if (!etas || etas.length === 0) return "";
+            
+            return etas.slice(0, 3).map(eta => {
+                let colorClass = "eta-green";
+                if (eta < 9) {
+                    colorClass = "eta-red";
+                } else if (eta >= 9 && eta <= 15) {
+                    colorClass = "eta-orange";
+                }
+                return `<span class="eta-badge ${colorClass}">${eta}</span>`;
+            }).join("");
+        }
+
+        /**
+         * Main update routine triggered on load and auto-refreshed every 10s
+         */
+        async function updateBusSchedule() {
+            const now = new Date();
+
+            // Update title with timestamp
+            const titleEl = document.getElementById("title-line");
+            titleEl.textContent = `回家交通 ${formatTitleDateTime(now)}`;
+
+            const tbody = document.getElementById("eta-rows");
+            const fragment = document.createDocumentFragment();
+
+            // Process all instructions asynchronously
+            const results = await Promise.all(
+                BUS_INSTRUCTIONS.map(async (item) => {
+                    const etas = await processBusInstruction(item, now);
+                    return { item, etas };
+                })
+            );
+
+            // Render output rows
+            results.forEach(({ item, etas }) => {
+                // Skip route if there are no more buses for current date
+                if (!etas || etas.length === 0) {
+                    return;
+                }
+
+                const tr = document.createElement("tr");
+                tr.className = "border-b border-gray-800";
+
+                // Direction Column (20%)
+                const tdDir = document.createElement("td");
+                tdDir.className = "truncate-text";
+                tdDir.textContent = item.direction;
+
+                // Route Column (20%) - Blue rectangular background, no bus company id
+                const tdRoute = document.createElement("td");
+                tdRoute.className = "truncate-text";
+                tdRoute.innerHTML = `<span class="route-badge">${item.route}</span>`;
+
+                // Stop Name Column (28%)
+                const tdStop = document.createElement("td");
+                tdStop.className = "truncate-text";
+                tdStop.textContent = item.stopName;
+
+                // ETA Column (32%) - Colored rectangular backgrounds
+                const tdEta = document.createElement("td");
+                tdEta.className = "truncate-text";
+                tdEta.innerHTML = renderEtaBadges(etas);
+
+                tr.appendChild(tdDir);
+                tr.appendChild(tdRoute);
+                tr.appendChild(tdStop);
+                tr.appendChild(tdEta);
+
+                fragment.appendChild(tr);
+            });
+
+            tbody.innerHTML = "";
+            tbody.appendChild(fragment);
+        }
+
+        // Initialize and set 10-second silent auto-refresh
+        window.onload = function() {
+            updateBusSchedule();
+            setInterval(updateBusSchedule, 10000); // Hidden auto-refresh every 10 seconds
+        };
+    </script>
+</body>
+</html>
